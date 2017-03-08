@@ -13,7 +13,7 @@ from django.utils import encoding
 from webob import Response
 
 from xblock.core import XBlock
-from xblock.fields import Scope, String, Integer, Boolean
+from xblock.fields import Scope, String, Integer, Boolean, Float
 from xblock.fragment import Fragment
 
 from openedx.core.lib.xblock_utils import add_staff_markup
@@ -37,6 +37,7 @@ SCORM_PKG_INTERNAL = {"value": "SCORM_PKG_INTERNAL", "display_name": "Internal P
 DEFAULT_SCO_MAX_SCORE = 100
 DEFAULT_IFRAME_WIDTH = 800
 DEFAULT_IFRAME_HEIGHT = 400
+SCORM_COMPLETE_STATUSES = (u'complete', u'passed', u'failed')
 
 AVAIL_ENCODINGS = encodings.aliases.aliases
 
@@ -81,7 +82,7 @@ class ScormXBlock(XBlock):
         scope=Scope.user_state,
         default='not attempted'
     )
-    lesson_score = Integer(
+    lesson_score = Float(
         scope=Scope.user_state,
         default=0
     )
@@ -395,16 +396,24 @@ class ScormXBlock(XBlock):
         """
         # TODO: this is specific to SSLA player at this point.  evaluate for broader use case
         data = request.POST['data']
-        self.raw_scorm_status = data
+        scorm_data = json.loads(data)
+
+        new_status = scorm_data.get('status', 'not attempted')
+
         if not self.scorm_initialized:
             self._init_scos()
-        scorm_data = json.loads(self.raw_scorm_status)
-        self.lesson_status = scorm_data.get('status', 'not attempted')
+
+        self.raw_scorm_status = data
+                
+        self.lesson_status = new_status
+
         scos = scorm_data.get('scos')
         if scos:
-            self._set_lesson_score(scos)
-            self._publish_grade(scos)
-        
+            score = self._set_lesson_score(scos)
+            self._publish_grade(new_status, score)
+
+        self.save()
+
         # TODO: handle errors
         return Response(json.dumps(self.raw_scorm_status), content_type='application/json')
 
@@ -435,28 +444,34 @@ class ScormXBlock(XBlock):
         for sco in scos.keys():
             sco = scos[sco]['data']
             total_score += int(self._get_value_from_sco(sco, 'cmi.core.score.raw', 0))
-        self.lesson_score = float(total_score) / float(len(scos.keys()))
+        score_rollup = float(total_score) / float(len(scos.keys()))
+        self.lesson_score = score_rollup
+        return score_rollup
 
-    def _publish_grade(self, scos):
-        """
-        if lesson is complete with pass or fail, publish grade in LMS
-        """
-        if self.lesson_status in ('passed', 'failed'):
 
-            # translate the internal score as a percentage of block's weight
-            # we are assuming here the best practice for SCORM 1.2 of a max score of 100
-            # if we weren't dealing with KESDEE publisher's incorrect usage of cmi.core.score.max
-            # we could compute based on a real max score
-            # in practice, SCOs will almost certainly have a max of 100
-            # http://www.ostyn.com/blog/2006/09/scoring-in-scorm.html
-            # TODO: handle variable max scores when we support SCORM2004+ or a better KESDEE workaround
-            self.runtime.publish(
-                self,
-                'grade',
-                {
-                    'value': (float(self.lesson_score)/float(DEFAULT_SCO_MAX_SCORE)) * self.weight,
-                    'max_value': self.weight,
-                })
+    def _publish_grade(self, status, score):
+        """
+        publish the grade in the LMS.
+        """
+        
+        # We must do this regardless of the lesson
+        # status to avoid race condition issues where a grade of None might overwrite a 
+        # grade value for incomplete lesson statuses.
+        
+        # translate the internal score as a percentage of block's weight
+        # we are assuming here the best practice for SCORM 1.2 of a max score of 100
+        # if we weren't dealing with KESDEE publisher's incorrect usage of cmi.core.score.max
+        # we could compute based on a real max score
+        # in practice, SCOs will almost certainly have a max of 100
+        # http://www.ostyn.com/blog/2006/09/scoring-in-scorm.html
+        # TODO: handle variable max scores when we support SCORM2004+ or a better KESDEE workaround
+        self.runtime.publish(
+            self,
+            'grade',
+            {
+                'value': (float(score)/float(DEFAULT_SCO_MAX_SCORE)) * self.weight,
+                'max_value': self.weight,
+            })
 
     @staticmethod
     def workbench_scenarios():
