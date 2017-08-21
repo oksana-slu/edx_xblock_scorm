@@ -429,11 +429,8 @@ class ScormXBlock(XBlock):
                 
         self.lesson_status = new_status
 
-        scos = scorm_data.get('scos')
-        if scos:
-            score = self._set_lesson_score(scos)
-            self._publish_grade(new_status, score)
-
+        score = scorm_data.get('score')
+        self._publish_grade(new_status, score)
         self.save()
 
         # TODO: handle errors
