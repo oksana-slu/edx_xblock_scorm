@@ -1,3 +1,4 @@
+import importlib
 import json
 import os
 import pkg_resources
@@ -8,7 +9,6 @@ import logging
 import encodings
 
 from django.conf import settings
-from django.core.files.storage import default_storage
 from django.utils import encoding
 from webob import Response
 
@@ -31,13 +31,22 @@ logger = logging.getLogger(__name__)
 # importing directly from settings.XBLOCK_SETTINGS doesn't work here... doesn't have vals from ENV TOKENS yet
 scorm_settings = settings.ENV_TOKENS['XBLOCK_SETTINGS']['ScormXBlock']
 DEFINED_PLAYERS = scorm_settings.get("SCORM_PLAYER_BACKENDS", {})
-SCORM_STORAGE = scorm_settings.get("SCORM_PKG_STORAGE_DIR", "scorms")
+SCORM_FILE_STORAGE_TYPE = scorm_settings.get("SCORM_FILE_STORAGE_TYPE", "django.core.files.storage.default_storage")
+SCORM_STORAGE_DIR = scorm_settings.get("SCORM_PKG_STORAGE_DIR", "scorms")
 SCORM_DISPLAY_STAFF_DEBUG_INFO = scorm_settings.get("SCORM_DISPLAY_STAFF_DEBUG_INFO", False)
 SCORM_PKG_INTERNAL = {"value": "SCORM_PKG_INTERNAL", "display_name": "Internal Player: index.html in SCORM package"}
 DEFAULT_SCO_MAX_SCORE = 100
 DEFAULT_IFRAME_WIDTH = 800
 DEFAULT_IFRAME_HEIGHT = 400
 SCORM_COMPLETE_STATUSES = (u'complete', u'passed', u'failed')
+
+mod, store_class = SCORM_FILE_STORAGE_TYPE.rsplit('.', 1)
+scorm_storage_module = importlib.import_module(mod)
+scorm_storage_class = getattr(scorm_storage_module, store_class)
+if SCORM_FILE_STORAGE_TYPE.endswith('default_storage'):
+    scorm_storage_instance = scorm_storage_class
+else:
+    scorm_storage_instance = scorm_storage_class()
 
 AVAIL_ENCODINGS = encodings.aliases.aliases
 
@@ -272,7 +281,7 @@ class ScormXBlock(XBlock):
                 json.loads(request.params['player_configuration'])  # just validation
                 self.player_configuration = request.params['player_configuration']
             except ValueError, e:
-                return Response(json.dumps({'result': 'failure', 'error': 'Invalid JSON in Player Configuration'.format(e)}), content_type='application/json')
+                return Response(json.dumps({'result': 'failure', 'error': 'Invalid JSON in Player Configuration'.format(e)}), content_type='application/json; charset=UTF-8')
 
         # scorm_file should only point to the path where imsmanifest.xml is located
         # scorm_player will have the index.html, launch.htm, etc. location for the JS player
@@ -280,9 +289,9 @@ class ScormXBlock(XBlock):
         if hasattr(request.params['file'], 'file'):
             file = request.params['file'].file
             zip_file = zipfile.ZipFile(file, 'r')
-            storage = default_storage
+            storage = scorm_storage_instance
             
-            path_to_file = os.path.join(SCORM_STORAGE, self.location.block_id)
+            path_to_file = os.path.join(SCORM_STORAGE_DIR, self.location.block_id)
 
             if storage.exists(os.path.join(path_to_file, 'imsmanifest.xml')):
                 try:
@@ -293,7 +302,7 @@ class ScormXBlock(XBlock):
                         for key in storage.bucket.list(prefix=path_to_file):
                             key.delete()
                     except AttributeError:
-                        return Response(json.dumps({'result': 'failure', 'error': 'Unsupported storage. Unable to overwrite old SCORM package contents'}), content_type='application/json')
+                        return Response(json.dumps({'result': 'failure', 'error': 'Unsupported storage. Unable to overwrite old SCORM package contents'}), content_type='application/json; charset=UTF-8')
 
             tempdir = tempfile.mkdtemp()
             zip_file.extractall(tempdir)
@@ -320,7 +329,7 @@ class ScormXBlock(XBlock):
             url = storage.url(path_to_file)
             self.scorm_file = '?' in url and url[:url.find('?')] or url
 
-        return Response(json.dumps({'result': 'success'}), content_type='application/json')
+        return Response(json.dumps({'result': 'success'}), content_type='application/json; charset=UTF-8')
 
     # if player sends SCORM API JSON directly
     @XBlock.json_handler
@@ -387,7 +396,7 @@ class ScormXBlock(XBlock):
         """
         # TODO: handle errors
         # TODO: this is specific to SSLA player at this point.  evaluate for broader use case
-        return Response(self.raw_scorm_status, content_type='application/json')
+        return Response(self.raw_scorm_status, content_type='application/json; charset=UTF-8')
 
     @XBlock.handler
     def set_raw_scorm_status(self, request, suffix=''):
@@ -415,7 +424,7 @@ class ScormXBlock(XBlock):
         self.save()
 
         # TODO: handle errors
-        return Response(json.dumps(self.raw_scorm_status), content_type='application/json')
+        return Response(json.dumps(self.raw_scorm_status), content_type='application/json; charset=UTF-8')
 
     def _get_value_from_sco(self, sco, key, default):
         """
