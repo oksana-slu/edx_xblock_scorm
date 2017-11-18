@@ -38,7 +38,7 @@ SCORM_PKG_INTERNAL = {"value": "SCORM_PKG_INTERNAL", "display_name": "Internal P
 DEFAULT_SCO_MAX_SCORE = 100
 DEFAULT_IFRAME_WIDTH = 800
 DEFAULT_IFRAME_HEIGHT = 400
-SCORM_COMPLETE_STATUSES = (u'complete', u'passed', u'failed')
+SCORM_COMPLETE_STATUSES = (u'completed', u'passed', u'failed')
 
 mod, store_class = SCORM_FILE_STORAGE_TYPE.rsplit('.', 1)
 scorm_storage_module = importlib.import_module(mod)
