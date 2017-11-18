@@ -90,11 +90,15 @@ function ScormXBlock_${block_id}(runtime, element) {
       $(host_frame_${block_id}).on('load', function() {
         playerWin = host_frame_${block_id}[0].contentWindow;
         playerWin.postMessage(host_frame_${block_id}.data(), '*');
-         launch_btn_${block_id}.attr('disabled','true');
-      });
-      $(host_frame_${block_id}).on('unload', function() {
+        launch_btn_${block_id}.attr('disabled','true');
+
+        playerWin.ssla.ssla.scorm.events.postFinish.add(function() {
         launch_btn_${block_id}.removeAttr('disabled');
-      })
+        })
+
+      });
+      
+
     });    
 
   });
