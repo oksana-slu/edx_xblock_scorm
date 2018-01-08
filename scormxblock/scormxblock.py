@@ -1,3 +1,4 @@
+import importlib
 import json
 import os
 import pkg_resources
@@ -8,15 +9,15 @@ import logging
 import encodings
 
 from django.conf import settings
-from django.core.files.storage import default_storage
 from django.utils import encoding
 from webob import Response
 
 from xblock.core import XBlock
-from xblock.fields import Scope, String, Integer, Boolean
+from xblock.fields import Scope, String, Integer, Boolean, Float
 from xblock.fragment import Fragment
 
 from openedx.core.lib.xblock_utils import add_staff_markup
+from microsite_configuration import microsite
 
 from mako.template import Template as MakoTemplate
 
@@ -30,12 +31,22 @@ logger = logging.getLogger(__name__)
 # importing directly from settings.XBLOCK_SETTINGS doesn't work here... doesn't have vals from ENV TOKENS yet
 scorm_settings = settings.ENV_TOKENS['XBLOCK_SETTINGS']['ScormXBlock']
 DEFINED_PLAYERS = scorm_settings.get("SCORM_PLAYER_BACKENDS", {})
-SCORM_STORAGE = scorm_settings.get("SCORM_PKG_STORAGE_DIR", "scorms")
+SCORM_FILE_STORAGE_TYPE = scorm_settings.get("SCORM_FILE_STORAGE_TYPE", "django.core.files.storage.default_storage")
+SCORM_STORAGE_DIR = scorm_settings.get("SCORM_PKG_STORAGE_DIR", "scorms")
 SCORM_DISPLAY_STAFF_DEBUG_INFO = scorm_settings.get("SCORM_DISPLAY_STAFF_DEBUG_INFO", False)
 SCORM_PKG_INTERNAL = {"value": "SCORM_PKG_INTERNAL", "display_name": "Internal Player: index.html in SCORM package"}
 DEFAULT_SCO_MAX_SCORE = 100
 DEFAULT_IFRAME_WIDTH = 800
 DEFAULT_IFRAME_HEIGHT = 400
+SCORM_COMPLETE_STATUSES = (u'completed', u'passed', u'failed')
+
+mod, store_class = SCORM_FILE_STORAGE_TYPE.rsplit('.', 1)
+scorm_storage_module = importlib.import_module(mod)
+scorm_storage_class = getattr(scorm_storage_module, store_class)
+if SCORM_FILE_STORAGE_TYPE.endswith('default_storage'):
+    scorm_storage_instance = scorm_storage_class
+else:
+    scorm_storage_instance = scorm_storage_class()
 
 AVAIL_ENCODINGS = encodings.aliases.aliases
 
@@ -80,7 +91,7 @@ class ScormXBlock(XBlock):
         scope=Scope.user_state,
         default='not attempted'
     )
-    lesson_score = Integer(
+    lesson_score = Float(
         scope=Scope.user_state,
         default=0
     )
@@ -131,13 +142,12 @@ class ScormXBlock(XBlock):
 
     @property
     def student_name(self):
-        # SCORM 1.2 API expects student name as "last, first"
         if hasattr(self, "xmodule_runtime"):
             user = self.xmodule_runtime._services['user'].get_current_user()
             try:
-                return self._reverse_student_name(user.display_name)
+                return user.display_name
             except AttributeError:
-                return self._reverse_student_name(user.full_name)
+                return user.full_name
         else:
             return None
 
@@ -167,6 +177,9 @@ class ScormXBlock(XBlock):
     def student_view(self, context=None, authoring=False):
         scheme = 'https' if settings.HTTPS == 'on' else 'http'
         lms_base = settings.ENV_TOKENS.get('LMS_BASE')
+        if microsite.is_request_in_microsite():
+            subdomain = microsite.get_value("domain_prefix", None) or microsite.get_value('microsite_config_key')
+            lms_base = "{}.{}".format(subdomain, lms_base) 
         scorm_player_url = ""
 
         if self.scorm_player == 'SCORM_PKG_INTERNAL':
@@ -268,7 +281,7 @@ class ScormXBlock(XBlock):
                 json.loads(request.params['player_configuration'])  # just validation
                 self.player_configuration = request.params['player_configuration']
             except ValueError, e:
-                return Response(json.dumps({'result': 'failure', 'error': 'Invalid JSON in Player Configuration'.format(e)}), content_type='application/json')
+                return Response(json.dumps({'result': 'failure', 'error': 'Invalid JSON in Player Configuration'.format(e)}), content_type='application/json; charset=UTF-8')
 
         # scorm_file should only point to the path where imsmanifest.xml is located
         # scorm_player will have the index.html, launch.htm, etc. location for the JS player
@@ -276,9 +289,9 @@ class ScormXBlock(XBlock):
         if hasattr(request.params['file'], 'file'):
             file = request.params['file'].file
             zip_file = zipfile.ZipFile(file, 'r')
-            storage = default_storage
+            storage = scorm_storage_instance
             
-            path_to_file = os.path.join(SCORM_STORAGE, self.location.block_id)
+            path_to_file = os.path.join(SCORM_STORAGE_DIR, self.location.block_id)
 
             if storage.exists(os.path.join(path_to_file, 'imsmanifest.xml')):
                 try:
@@ -289,7 +302,7 @@ class ScormXBlock(XBlock):
                         for key in storage.bucket.list(prefix=path_to_file):
                             key.delete()
                     except AttributeError:
-                        return Response(json.dumps({'result': 'failure', 'error': 'Unsupported storage. Unable to overwrite old SCORM package contents'}), content_type='application/json')
+                        return Response(json.dumps({'result': 'failure', 'error': 'Unsupported storage. Unable to overwrite old SCORM package contents'}), content_type='application/json; charset=UTF-8')
 
             tempdir = tempfile.mkdtemp()
             zip_file.extractall(tempdir)
@@ -316,7 +329,7 @@ class ScormXBlock(XBlock):
             url = storage.url(path_to_file)
             self.scorm_file = '?' in url and url[:url.find('?')] or url
 
-        return Response(json.dumps({'result': 'success'}), content_type='application/json')
+        return Response(json.dumps({'result': 'success'}), content_type='application/json; charset=UTF-8')
 
     # if player sends SCORM API JSON directly
     @XBlock.json_handler
@@ -383,7 +396,7 @@ class ScormXBlock(XBlock):
         """
         # TODO: handle errors
         # TODO: this is specific to SSLA player at this point.  evaluate for broader use case
-        return Response(self.raw_scorm_status, content_type='application/json')
+        return Response(self.raw_scorm_status, content_type='application/json; charset=UTF-8')
 
     @XBlock.handler
     def set_raw_scorm_status(self, request, suffix=''):
@@ -392,18 +405,26 @@ class ScormXBlock(XBlock):
         """
         # TODO: this is specific to SSLA player at this point.  evaluate for broader use case
         data = request.POST['data']
-        self.raw_scorm_status = data
+        scorm_data = json.loads(data)
+
+        new_status = scorm_data.get('status', 'not attempted')
+
         if not self.scorm_initialized:
             self._init_scos()
-        scorm_data = json.loads(self.raw_scorm_status)
-        self.lesson_status = scorm_data.get('status', 'not attempted')
+
+        self.raw_scorm_status = data
+                
+        self.lesson_status = new_status
+
         scos = scorm_data.get('scos')
         if scos:
-            self._set_lesson_score(scos)
-            self._publish_grade(scos)
-        
+            score = self._set_lesson_score(scos)
+            self._publish_grade(new_status, score)
+
+        self.save()
+
         # TODO: handle errors
-        return Response(json.dumps(self.raw_scorm_status), content_type='application/json')
+        return Response(json.dumps(self.raw_scorm_status), content_type='application/json; charset=UTF-8')
 
     def _get_value_from_sco(self, sco, key, default):
         """
@@ -432,28 +453,34 @@ class ScormXBlock(XBlock):
         for sco in scos.keys():
             sco = scos[sco]['data']
             total_score += int(self._get_value_from_sco(sco, 'cmi.core.score.raw', 0))
-        self.lesson_score = float(total_score) / float(len(scos.keys()))
+        score_rollup = float(total_score) / float(len(scos.keys()))
+        self.lesson_score = score_rollup
+        return score_rollup
 
-    def _publish_grade(self, scos):
-        """
-        if lesson is complete with pass or fail, publish grade in LMS
-        """
-        if self.lesson_status in ('passed', 'failed'):
 
-            # translate the internal score as a percentage of block's weight
-            # we are assuming here the best practice for SCORM 1.2 of a max score of 100
-            # if we weren't dealing with KESDEE publisher's incorrect usage of cmi.core.score.max
-            # we could compute based on a real max score
-            # in practice, SCOs will almost certainly have a max of 100
-            # http://www.ostyn.com/blog/2006/09/scoring-in-scorm.html
-            # TODO: handle variable max scores when we support SCORM2004+ or a better KESDEE workaround
-            self.runtime.publish(
-                self,
-                'grade',
-                {
-                    'value': (float(self.lesson_score)/float(DEFAULT_SCO_MAX_SCORE)) * self.weight,
-                    'max_value': self.weight,
-                })
+    def _publish_grade(self, status, score):
+        """
+        publish the grade in the LMS.
+        """
+        
+        # We must do this regardless of the lesson
+        # status to avoid race condition issues where a grade of None might overwrite a 
+        # grade value for incomplete lesson statuses.
+        
+        # translate the internal score as a percentage of block's weight
+        # we are assuming here the best practice for SCORM 1.2 of a max score of 100
+        # if we weren't dealing with KESDEE publisher's incorrect usage of cmi.core.score.max
+        # we could compute based on a real max score
+        # in practice, SCOs will almost certainly have a max of 100
+        # http://www.ostyn.com/blog/2006/09/scoring-in-scorm.html
+        # TODO: handle variable max scores when we support SCORM2004+ or a better KESDEE workaround
+        self.runtime.publish(
+            self,
+            'grade',
+            {
+                'value': (float(score)/float(DEFAULT_SCO_MAX_SCORE)) * self.weight,
+                'max_value': self.weight,
+            })
 
     @staticmethod
     def workbench_scenarios():
