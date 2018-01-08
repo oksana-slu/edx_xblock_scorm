@@ -53,6 +53,7 @@ else:
     scorm_storage_instance = scorm_storage_class()
 
 AVAIL_ENCODINGS = encodings.aliases.aliases
+DEFAULT_SITE_DOMAIN = "example.com"
 
 class ScormXBlock(XBlock):
 
@@ -186,8 +187,9 @@ class ScormXBlock(XBlock):
             site = get_current_site()  # theming.helpers
         except TypeError:
             site = get_current_site(RequestCache.get_current_request())  # django.contrib.site
-        try:            
-            lms_base = site.domain
+        try:  
+            # guard against unset/default Site domain           
+            lms_base = site.domain if str(site.domain) != DEFAULT_SITE_DOMAIN else settings.ENV_TOKENS.get("LMS_BASE")
         except AttributeError:
             lms_base = settings.ENV_TOKENS("LMS_BASE")    
 
