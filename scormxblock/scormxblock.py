@@ -38,6 +38,7 @@ DEFINED_PLAYERS = scorm_settings.get("SCORM_PLAYER_BACKENDS", {})
 SCORM_FILE_STORAGE_TYPE = scorm_settings.get("SCORM_FILE_STORAGE_TYPE", "django.core.files.storage.default_storage")
 SCORM_STORAGE_DIR = scorm_settings.get("SCORM_PKG_STORAGE_DIR", "scorms")
 SCORM_DISPLAY_STAFF_DEBUG_INFO = scorm_settings.get("SCORM_DISPLAY_STAFF_DEBUG_INFO", False)
+SCORM_REVERSE_STUDENT_NAMES = scorm_settings.get("SCORM_REVERSE_STUDENT_NAMES", True)
 SCORM_PKG_INTERNAL = {"value": "SCORM_PKG_INTERNAL", "display_name": "Internal Player: index.html in SCORM package"}
 DEFAULT_SCO_MAX_SCORE = 100
 DEFAULT_IFRAME_WIDTH = 800
@@ -150,13 +151,13 @@ class ScormXBlock(XBlock):
         anon_id = self.runtime.anonymous_student_id
         student = self.runtime.get_real_user(anon_id) if self.runtime.get_real_user is not None else None
         if student:
-            # reverse or not should be set from SiteConfiguration.  reverse should be default
-            # and is expected by SCORM API 
-            reverse = True
+            # reverse should be default and is expected by SCORM API 
+            # but can be overridden via XBLOCK settings
+            reverse = SCORM_REVERSE_STUDENT_NAMES
             if reverse:
-                return "{}, {}".format(student.last_name, student.first_name)
+                return u"{}, {}".format(student.last_name, student.first_name)
             else:
-                return "{} {}".format(student.first_name, student.last_name)
+                return u"{} {}".format(student.first_name, student.last_name)
         else:
             return ""
 
