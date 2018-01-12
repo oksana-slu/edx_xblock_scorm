@@ -151,7 +151,12 @@ class ScormXBlock(XBlock):
         student = self.runtime.get_real_user(anon_id) if self.runtime.get_real_user is not None else None
         if student:
             # reverse or not should be set from SiteConfiguration.  reverse should be default
-            return self._reverse_student_name(student.display_name)
+            # and is expected by SCORM API 
+            reverse = True
+            if reverse:
+                return "{}, {}".format(student.last_name, student.first_name)
+            else:
+                return "{} {}".format(student.first_name, student.last_name)
         else:
             return ""
 
@@ -161,11 +166,6 @@ class ScormXBlock(XBlock):
             return self._serialize_opaque_key(self.xmodule_runtime.course_id)
         else:
             return None
-
-    def _reverse_student_name(self, name):
-        parts = name.split(' ', 1)
-        parts.reverse()
-        return ', '.join(parts)
 
     def _serialize_opaque_key(self, key):
         if hasattr(key, 'to_deprecated_string'):
