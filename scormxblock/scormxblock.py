@@ -142,14 +142,13 @@ class ScormXBlock(XBlock):
 
     @property
     def student_name(self):
-        if hasattr(self, "xmodule_runtime"):
-            user = self.xmodule_runtime._services['user'].get_current_user()
-            try:
-                return user.display_name
-            except AttributeError:
-                return user.full_name
+        anon_id = self.runtime.anonymous_student_id
+        student = self.runtime.get_real_user(anon_id) if self.runtime.get_real_user is not None else None
+        if student:
+            # reverse or not should be set from SiteConfiguration.  reverse should be default
+            return self._reverse_student_name(student.display_name)
         else:
-            return None
+            return ""
 
     @property
     def course_id(self):
