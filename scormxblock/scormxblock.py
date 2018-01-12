@@ -17,7 +17,11 @@ from xblock.fields import Scope, String, Integer, Boolean, Float
 from xblock.fragment import Fragment
 
 from openedx.core.lib.xblock_utils import add_staff_markup
-from microsite_configuration import microsite
+try:
+    from openedx.core.djangoapps.theming.helpers import get_current_site
+except ImportError:
+    from django.contrib.sites.shortcuts import get_current_site
+    from request_cache.middleware import RequestCache
 
 from mako.template import Template as MakoTemplate
 
@@ -49,6 +53,7 @@ else:
     scorm_storage_instance = scorm_storage_class()
 
 AVAIL_ENCODINGS = encodings.aliases.aliases
+DEFAULT_SITE_DOMAIN = "example.com"
 
 class ScormXBlock(XBlock):
 
@@ -177,9 +182,17 @@ class ScormXBlock(XBlock):
     def student_view(self, context=None, authoring=False):
         scheme = 'https' if settings.HTTPS == 'on' else 'http'
         lms_base = settings.ENV_TOKENS.get('LMS_BASE')
-        if microsite.is_request_in_microsite():
-            subdomain = microsite.get_value("domain_prefix", None) or microsite.get_value('microsite_config_key')
-            lms_base = "{}.{}".format(subdomain, lms_base) 
+
+        try:
+            site = get_current_site()  # theming.helpers
+        except TypeError:
+            site = get_current_site(RequestCache.get_current_request())  # django.contrib.site
+        try:  
+            # guard against unset/default Site domain           
+            lms_base = site.domain if str(site.domain) != DEFAULT_SITE_DOMAIN else settings.ENV_TOKENS.get("LMS_BASE")
+        except AttributeError:
+            lms_base = settings.ENV_TOKENS("LMS_BASE")    
+
         scorm_player_url = ""
 
         if self.scorm_player == 'SCORM_PKG_INTERNAL':
