@@ -22,7 +22,9 @@ def package_data(pkg, roots):
 
 setup(
     name='scormxblock-xblock',
-    version='0.3.1',
+    author='Bryan Wilson',
+    author_email='bryan@appsembler.com',
+    version='0.4.0',
     description='XBlock to integrate SCORM content packages',
     packages=[
         'scormxblock',
