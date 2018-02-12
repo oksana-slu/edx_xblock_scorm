@@ -151,15 +151,21 @@ class ScormXBlock(XBlock):
         anon_id = self.runtime.anonymous_student_id
         student = self.runtime.get_real_user(anon_id) if self.runtime.get_real_user is not None else None
         if student:
-            # reverse should be default and is expected by SCORM API 
-            # but can be overridden via XBLOCK settings
-            reverse = SCORM_REVERSE_STUDENT_NAMES
-            if reverse:
-                return u"{}, {}".format(student.last_name, student.first_name)
-            else:
-                return u"{} {}".format(student.first_name, student.last_name)
+            try:
+                # reverse should be default and is expected by SCORM API 
+                # but can be overridden via XBLOCK settings
+                reverse = SCORM_REVERSE_STUDENT_NAMES
+                split_name = student.profile.name.split(' ')
+                first_name = student.first_name if student.first_name else split_name[0]
+                last_name = student.last_name if student.last_name else ' '.join(split_name[1:])
+                if reverse:
+                    return u"{}, {}".format(last_name, first_name)
+                else:
+                    return u"{} {}".format(first_name, last_name)
+            except (AttributeError, IndexError):
+                return u""
         else:
-            return ""
+            return u""
 
     @property
     def course_id(self):
