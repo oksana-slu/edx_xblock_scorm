@@ -52,6 +52,11 @@ Each backend is a key under `SCORM_PLAYER_BACKENDS` and should provide a `"name"
 
 Nginx (or other front-end web server) must be configured to serve SCORM content. See the file [`docs/nginx_configuration.md`](docs/nginx_configuration.md) for edits that need to be made to your `/etc/nginx/sites-enabled/lms` and `/etc/nginx/sites-enabled/cms` files to serve your SCORM content.
 
+# `Site` configuration
+
+The SCORM XBlock is `Site`-aware.  Student views of XBlock instances will use the current `Site` domain as the LMS endpoint URL root.  Make sure your default any other `Site`s are configured with the proper domain.
+A common mistake would be to leave the default `Site` domain as `"example.com"`.  Update your default `Site` domain via `/admin/sites/site`.
+
 # Usage
 * In Studio, add `scormxblock` to the list of advanced modules in the advanced settings of a course.
 * Add a 'scorm' component to your Unit. 

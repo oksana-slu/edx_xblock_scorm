@@ -17,7 +17,11 @@ from xblock.fields import Scope, String, Integer, Boolean, Float
 from xblock.fragment import Fragment
 
 from openedx.core.lib.xblock_utils import add_staff_markup
-from microsite_configuration import microsite
+try:
+    from openedx.core.djangoapps.theming.helpers import get_current_site
+except ImportError:
+    from django.contrib.sites.shortcuts import get_current_site
+    from request_cache.middleware import RequestCache
 
 from mako.template import Template as MakoTemplate
 
@@ -38,6 +42,7 @@ DEFAULT_IFRAME_HEIGHT = 400
 SCORM_COMPLETE_STATUSES = (u'completed', u'passed', u'failed')
 
 AVAIL_ENCODINGS = encodings.aliases.aliases
+DEFAULT_SITE_DOMAIN = "example.com"
 
 
 class ScormXBlock(settings_mixin.ConfigurationSettingsMixin, XBlock):
@@ -162,14 +167,24 @@ class ScormXBlock(settings_mixin.ConfigurationSettingsMixin, XBlock):
 
     @property
     def student_name(self):
-        if hasattr(self, "xmodule_runtime"):
-            user = self.xmodule_runtime._services['user'].get_current_user()
+        anon_id = self.runtime.anonymous_student_id
+        student = self.runtime.get_real_user(anon_id) if self.runtime.get_real_user is not None else None
+        if student:
             try:
-                return user.display_name
-            except AttributeError:
-                return user.full_name
+                # reverse should be default and is expected by SCORM API 
+                # but can be overridden via XBLOCK settings
+                reverse = SCORM_REVERSE_STUDENT_NAMES
+                split_name = student.profile.name.split(' ')
+                first_name = student.first_name if student.first_name else split_name[0]
+                last_name = student.last_name if student.last_name else ' '.join(split_name[1:])
+                if reverse:
+                    return u"{}, {}".format(last_name, first_name)
+                else:
+                    return u"{} {}".format(first_name, last_name)
+            except (AttributeError, IndexError):
+                return u""
         else:
-            return None
+            return u""
 
     @property
     def course_id(self):
@@ -180,11 +195,6 @@ class ScormXBlock(settings_mixin.ConfigurationSettingsMixin, XBlock):
         super(ScormXBlock, self).__init__(runtime=runtime, scope_ids=scope_ids, field_data=field_data, *args, **kwargs)
         defined_players = self.scorm_players
         self.fields['scorm_player']._values = [{"value": key, "display_name": defined_players[key]['name']} for key in defined_players.keys()] + [SCORM_PKG_INTERNAL,]
-
-    def _reverse_student_name(self, name):
-        parts = name.split(' ', 1)
-        parts.reverse()
-        return ', '.join(parts)
 
     def _serialize_opaque_key(self, key):
         if hasattr(key, 'to_deprecated_string'):
@@ -200,9 +210,17 @@ class ScormXBlock(settings_mixin.ConfigurationSettingsMixin, XBlock):
     def student_view(self, context=None, authoring=False):
         scheme = 'https' if settings.HTTPS == 'on' else 'http'
         lms_base = settings.ENV_TOKENS.get('LMS_BASE')
-        if microsite.is_request_in_microsite():
-            subdomain = microsite.get_value("domain_prefix", None) or microsite.get_value('microsite_config_key')
-            lms_base = "{}.{}".format(subdomain, lms_base) 
+
+        try:
+            site = get_current_site()  # theming.helpers
+        except TypeError:
+            site = get_current_site(RequestCache.get_current_request())  # django.contrib.site
+        try:  
+            # guard against unset/default Site domain           
+            lms_base = site.domain if str(site.domain) != DEFAULT_SITE_DOMAIN else settings.ENV_TOKENS.get("LMS_BASE")
+        except AttributeError:
+            lms_base = settings.ENV_TOKENS("LMS_BASE")    
+
         scorm_player_url = ""
 
         if self.scorm_player == 'SCORM_PKG_INTERNAL':
@@ -304,7 +322,7 @@ class ScormXBlock(settings_mixin.ConfigurationSettingsMixin, XBlock):
                 json.loads(request.params['player_configuration'])  # just validation
                 self.player_configuration = request.params['player_configuration']
             except ValueError, e:
-                return Response(json.dumps({'result': 'failure', 'error': 'Invalid JSON in Player Configuration'.format(e)}), content_type='application/json; charset=UTF-8')
+                return Response(json.dumps({'result': 'failure', 'error': 'Invalid JSON in Player Configuration'.format(e)}), content_type='application/json', charset='UTF-8')
 
         # scorm_file should only point to the path where imsmanifest.xml is located
         # scorm_player will have the index.html, launch.htm, etc. location for the JS player
@@ -325,7 +343,7 @@ class ScormXBlock(settings_mixin.ConfigurationSettingsMixin, XBlock):
                         for key in storage.bucket.list(prefix=path_to_file):
                             key.delete()
                     except AttributeError:
-                        return Response(json.dumps({'result': 'failure', 'error': 'Unsupported storage. Unable to overwrite old SCORM package contents'}), content_type='application/json; charset=UTF-8')
+                        return Response(json.dumps({'result': 'failure', 'error': 'Unsupported storage. Unable to overwrite old SCORM package contents'}), content_type='application/json', charset='UTF-8')
 
             tempdir = tempfile.mkdtemp()
             zip_file.extractall(tempdir)
@@ -352,7 +370,7 @@ class ScormXBlock(settings_mixin.ConfigurationSettingsMixin, XBlock):
             url = storage.url(path_to_file)
             self.scorm_file = '?' in url and url[:url.find('?')] or url
 
-        return Response(json.dumps({'result': 'success'}), content_type='application/json; charset=UTF-8')
+        return Response(json.dumps({'result': 'success'}), content_type='application/json', charset='UTF-8')
 
     # if player sends SCORM API JSON directly
     @XBlock.json_handler
@@ -419,7 +437,7 @@ class ScormXBlock(settings_mixin.ConfigurationSettingsMixin, XBlock):
         """
         # TODO: handle errors
         # TODO: this is specific to SSLA player at this point.  evaluate for broader use case
-        return Response(self.raw_scorm_status, content_type='application/json; charset=UTF-8')
+        return Response(self.raw_scorm_status, content_type='application/json', charset='UTF-8')
 
     @XBlock.handler
     def set_raw_scorm_status(self, request, suffix=''):
@@ -439,15 +457,12 @@ class ScormXBlock(settings_mixin.ConfigurationSettingsMixin, XBlock):
                 
         self.lesson_status = new_status
 
-        scos = scorm_data.get('scos')
-        if scos:
-            score = self._set_lesson_score(scos)
-            self._publish_grade(new_status, score)
-
+        score = scorm_data.get('score')
+        self._publish_grade(new_status, score)
         self.save()
 
         # TODO: handle errors
-        return Response(json.dumps(self.raw_scorm_status), content_type='application/json; charset=UTF-8')
+        return Response(json.dumps(self.raw_scorm_status), content_type='application/json', charset='UTF-8')
 
     def _get_value_from_sco(self, sco, key, default):
         """
@@ -497,13 +512,14 @@ class ScormXBlock(settings_mixin.ConfigurationSettingsMixin, XBlock):
         # in practice, SCOs will almost certainly have a max of 100
         # http://www.ostyn.com/blog/2006/09/scoring-in-scorm.html
         # TODO: handle variable max scores when we support SCORM2004+ or a better KESDEE workaround
-        self.runtime.publish(
-            self,
-            'grade',
-            {
-                'value': (float(score)/float(DEFAULT_SCO_MAX_SCORE)) * self.weight,
-                'max_value': self.weight,
-            })
+        if score != '':
+            self.runtime.publish(
+                self,
+                'grade',
+                {
+                    'value': (float(score)/float(DEFAULT_SCO_MAX_SCORE)) * self.weight,
+                    'max_value': self.weight,
+                })
 
     @staticmethod
     def workbench_scenarios():
