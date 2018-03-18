@@ -173,7 +173,7 @@ class ScormXBlock(settings_mixin.ConfigurationSettingsMixin, XBlock):
             try:
                 # reverse should be default and is expected by SCORM API 
                 # but can be overridden via XBLOCK settings
-                reverse = SCORM_REVERSE_STUDENT_NAMES
+                reverse = self.reverse_student_names
                 split_name = student.profile.name.split(' ')
                 first_name = student.first_name if student.first_name else split_name[0]
                 last_name = student.last_name if student.last_name else ' '.join(split_name[1:])
@@ -209,8 +209,7 @@ class ScormXBlock(settings_mixin.ConfigurationSettingsMixin, XBlock):
 
     def student_view(self, context=None, authoring=False):
         scheme = 'https' if settings.HTTPS == 'on' else 'http'
-        lms_base = settings.ENV_TOKENS.get('LMS_BASE')
-
+        
         try:
             site = get_current_site()  # theming.helpers
         except TypeError:
