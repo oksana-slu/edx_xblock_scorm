@@ -36,4 +36,8 @@ setup(
         ]
     },
     package_data=package_data("scormxblock", ["static", "public"]),
+    license="MIT",
+    classifiers=[
+        "License :: OSI Approved :: MIT Lincense",
+    ]
 )
