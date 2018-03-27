@@ -12,7 +12,7 @@ from django.conf import settings
 from django.utils import encoding
 from webob import Response
 
-from xblock.core import XBlock
+from xblock.core import XBlock, UNSET
 from xblock.fields import Scope, String, Integer, Boolean, Float
 from xblock.fragment import Fragment
 
@@ -25,6 +25,8 @@ except ImportError:
 
 from mako.template import Template as MakoTemplate
 
+import settings as settings_mixin
+
 
 # Make '_' a no-op so we can scrape strings
 _ = lambda text: text
@@ -32,31 +34,18 @@ _ = lambda text: text
 logger = logging.getLogger(__name__)
 
 
-# importing directly from settings.XBLOCK_SETTINGS doesn't work here... doesn't have vals from ENV TOKENS yet
-scorm_settings = settings.ENV_TOKENS['XBLOCK_SETTINGS']['ScormXBlock']
-DEFINED_PLAYERS = scorm_settings.get("SCORM_PLAYER_BACKENDS", {})
-SCORM_FILE_STORAGE_TYPE = scorm_settings.get("SCORM_FILE_STORAGE_TYPE", "django.core.files.storage.default_storage")
-SCORM_STORAGE_DIR = scorm_settings.get("SCORM_PKG_STORAGE_DIR", "scorms")
-SCORM_DISPLAY_STAFF_DEBUG_INFO = scorm_settings.get("SCORM_DISPLAY_STAFF_DEBUG_INFO", False)
-SCORM_REVERSE_STUDENT_NAMES = scorm_settings.get("SCORM_REVERSE_STUDENT_NAMES", True)
+DEFAULT_STORAGE_TYPE = "django.core.files.storage.default_storage"
 SCORM_PKG_INTERNAL = {"value": "SCORM_PKG_INTERNAL", "display_name": "Internal Player: index.html in SCORM package"}
 DEFAULT_SCO_MAX_SCORE = 100
 DEFAULT_IFRAME_WIDTH = 800
 DEFAULT_IFRAME_HEIGHT = 400
 SCORM_COMPLETE_STATUSES = (u'completed', u'passed', u'failed')
 
-mod, store_class = SCORM_FILE_STORAGE_TYPE.rsplit('.', 1)
-scorm_storage_module = importlib.import_module(mod)
-scorm_storage_class = getattr(scorm_storage_module, store_class)
-if SCORM_FILE_STORAGE_TYPE.endswith('default_storage'):
-    scorm_storage_instance = scorm_storage_class
-else:
-    scorm_storage_instance = scorm_storage_class()
-
 AVAIL_ENCODINGS = encodings.aliases.aliases
 DEFAULT_SITE_DOMAIN = "example.com"
 
-class ScormXBlock(XBlock):
+
+class ScormXBlock(settings_mixin.ConfigurationSettingsMixin, XBlock):
 
     has_score = True
     has_author_view = True
@@ -79,7 +68,8 @@ class ScormXBlock(XBlock):
         scope=Scope.settings
     )
     scorm_player = String(
-        values=[{"value": key, "display_name": DEFINED_PLAYERS[key]['name']} for key in DEFINED_PLAYERS.keys()] + [SCORM_PKG_INTERNAL, ],
+        values=[SCORM_PKG_INTERNAL, ], # defer addition of other possible values until XBlock instantiation
+        # [{"value": key, "display_name": defined_players[key]['name']} for key in defined_players.keys()] + [SCORM_PKG_INTERNAL, ],
         display_name=_("SCORM player"),
         help=_("SCORM player configured in Django settings, or index.html file contained in SCORM package"),
         scope=Scope.settings
@@ -140,6 +130,35 @@ class ScormXBlock(XBlock):
     )
 
     @property
+    def scorm_players(self):
+        return self.settings.get("SCORM_PLAYER_BACKENDS", [])
+
+    @property
+    def scorm_storage_dir(self):
+        return self.settings.get("SCORM_PKG_STORAGE_DIR", "scorms")
+
+    @property
+    def scorm_storage(self):
+        scorm_file_storage_type = self.settings.get("SCORM_FILE_STORAGE_TYPE", DEFAULT_STORAGE_TYPE)
+        mod, store_class = scorm_file_storage_type.rsplit('.', 1)
+        scorm_storage_module = importlib.import_module(mod)
+        scorm_storage_class = getattr(scorm_storage_module, store_class)
+        if scorm_file_storage_type.endswith('default_storage'):
+            scorm_storage_instance = scorm_storage_class
+        else:
+            scorm_storage_instance = scorm_storage_class()
+        return scorm_storage_instance
+
+    @property
+    def reverse_student_names(self):
+        return self.settings.get("SCORM_REVERSE_STUDENT_NAMES", True)
+
+    #TODO: remove this as an option. Always have it True
+    @property
+    def scorm_display_staff_debug_info(self):
+        return self.settings.get("SCORM_DISPLAY_STAFF_DEBUG_INFO", False)
+
+    @property
     def student_id(self):
         if hasattr(self, "scope_ids"):
             return self.scope_ids.user_id
@@ -154,7 +173,7 @@ class ScormXBlock(XBlock):
             try:
                 # reverse should be default and is expected by SCORM API 
                 # but can be overridden via XBLOCK settings
-                reverse = SCORM_REVERSE_STUDENT_NAMES
+                reverse = self.reverse_student_names
                 split_name = student.profile.name.split(' ')
                 first_name = student.first_name if student.first_name else split_name[0]
                 last_name = student.last_name if student.last_name else ' '.join(split_name[1:])
@@ -169,10 +188,13 @@ class ScormXBlock(XBlock):
 
     @property
     def course_id(self):
-        if hasattr(self, "xmodule_runtime"):
-            return self._serialize_opaque_key(self.xmodule_runtime.course_id)
-        else:
-            return None
+        return self.runtime.course_id
+
+    def __init__(self, runtime, field_data=None, scope_ids=UNSET, *args, **kwargs):
+        # update any field value options from configuration
+        super(ScormXBlock, self).__init__(runtime=runtime, scope_ids=scope_ids, field_data=field_data, *args, **kwargs)
+        defined_players = self.scorm_players
+        self.fields['scorm_player']._values = [{"value": key, "display_name": defined_players[key]['name']} for key in defined_players.keys()] + [SCORM_PKG_INTERNAL,]
 
     def _serialize_opaque_key(self, key):
         if hasattr(key, 'to_deprecated_string'):
@@ -187,8 +209,7 @@ class ScormXBlock(XBlock):
 
     def student_view(self, context=None, authoring=False):
         scheme = 'https' if settings.HTTPS == 'on' else 'http'
-        lms_base = settings.ENV_TOKENS.get('LMS_BASE')
-
+        
         try:
             site = get_current_site()  # theming.helpers
         except TypeError:
@@ -206,7 +227,7 @@ class ScormXBlock(XBlock):
             scorm_player_url = '{}://{}{}'.format(scheme, lms_base, self.scorm_file)
         elif self.scorm_player:
             # SSLA: launch.htm?courseId=1&studentName=Caudill,Brian&studentId=1&courseDirectory=courses/SSLA_tryout
-            player_config = DEFINED_PLAYERS[self.scorm_player]
+            player_config = self.scorm_players[self.scorm_player]
             player  = player_config['location']
             if '://' in player:
                 scorm_player_url = player
@@ -255,7 +276,7 @@ class ScormXBlock(XBlock):
         # TODO: is there another way to approach this?  key's location.category isn't mutable to spoof 'problem',
         # like setting the name in the entry point to 'problem'.  Doesn't seem like a good idea.  Better to 
         # have 'staff debuggable' categories configurable in settings or have an XBlock declare itself staff debuggable
-        if SCORM_DISPLAY_STAFF_DEBUG_INFO and not authoring:  # don't show for author preview
+        if self.scorm_display_staff_debug_info and not authoring:  # don't show for author preview
             from courseware.access import has_access
             from courseware.courses import get_course_by_id
 
@@ -308,9 +329,9 @@ class ScormXBlock(XBlock):
         if hasattr(request.params['file'], 'file'):
             file = request.params['file'].file
             zip_file = zipfile.ZipFile(file, 'r')
-            storage = scorm_storage_instance
+            storage = self.scorm_storage
             
-            path_to_file = os.path.join(SCORM_STORAGE_DIR, self.location.block_id)
+            path_to_file = os.path.join(self.scorm_storage_dir, self.location.block_id)
 
             if storage.exists(os.path.join(path_to_file, 'imsmanifest.xml')):
                 try:
